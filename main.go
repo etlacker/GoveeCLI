@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"os"
 
@@ -48,7 +49,13 @@ type ScanResponse struct {
 
 type DevStatus struct {
 	Msg struct {
-		Cmd  string `json:"cmd"`
+		Cmd string `json:"cmd"`
+		// Add other info for bubbletea model
+		DeviceData struct {
+			Device string       `json:"device"`
+			IP     *net.UDPAddr `json:"ip"`
+			Sku    string       `json:"sku"`
+		} `json:"deviceData"`
 		Data struct {
 			OnOff      int `json:"onOff"`
 			Brightness int `json:"brightness"`
@@ -69,7 +76,19 @@ func main() {
 		fmt.Printf("Alas, there's been an error: %v", err)
 		os.Exit(1)
 	}
+}
 
+// Testing out bubbletea
+// Model should create a list of govee devices and allow the user to select one or more
+// Start with just toggling state of selected devices
+
+type model struct {
+	choices  []DevStatus      // lamps that have reported
+	cursor   int              // which lamp our cursor is pointing at
+	selected map[int]struct{} // which lamps are selected
+}
+
+func initialModel() model {
 	serverAddr := "239.255.255.250:4002"
 	scanAddr := "239.255.255.250:4001"
 
@@ -87,7 +106,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Start listening for UDP packages on the given address
+	// Start listening for UDP packages on the server address
 	conn, err := net.ListenUDP("udp", udpServerAddr)
 	if err != nil {
 		fmt.Println(err)
@@ -115,7 +134,7 @@ func main() {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		fmt.Println(err)
-		return
+		os.Exit(1)
 	}
 
 	// Send the JSON data over UDP
@@ -123,91 +142,92 @@ func main() {
 	_, err = conn.WriteToUDP(jsonData, udpScanAddr)
 	if err != nil {
 		fmt.Println(err)
-		return
+		os.Exit(1)
 	}
 
 	// Read from UDP listener
+	// TODO Read all devices not just the first to respond(?)
 	var buf [512]byte
 	n, _, err := conn.ReadFromUDP(buf[0:])
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	// Unmarshal the data into a ScanResponse struct
-	var responseData ScanResponse
-	err = json.Unmarshal(buf[0:n], &responseData)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	// Pretty print the data
-	prettyData, err := json.MarshalIndent(responseData, "", "  ")
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	fmt.Println(string(prettyData))
-
-	var deviceAddr = responseData.Msg.Data.IP + ":4003"
-
-	// Resolve the string address to a UDP address
-	udpDeviceAddr, err := net.ResolveUDPAddr("udp", deviceAddr)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
 
-	// Create an instance of SimpleStateUpdateRequest
-	updateData := SimpleStateUpdateRequest{
+	// Unmarshal the data into a ScanResponse struct
+	var scanResponseData ScanResponse
+	err = json.Unmarshal(buf[0:n], &scanResponseData)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	// Create a SimpleStateUpdateRequest devStatus instance
+	devStatusUpdateData := SimpleStateUpdateRequest{
 		Msg: struct {
 			Cmd  string `json:"cmd"`
 			Data struct {
 				Value int `json:"value"`
 			} `json:"data"`
 		}{
-			Cmd: "turn",
-			Data: struct {
-				Value int `json:"value"`
-			}{
-				Value: 0,
-			},
+			Cmd: "devStatus",
 		},
 	}
 
 	// Marshal the data into JSON
-	requestData, err := json.Marshal(updateData)
+	devStatusRequestData, err := json.Marshal(devStatusUpdateData)
 	if err != nil {
 		fmt.Println(err)
-		return
+		os.Exit(1)
+	}
+
+	// Resolve the device address to a UDP address
+	deviceAddr, err := net.ResolveUDPAddr("udp", scanResponseData.Msg.Data.IP+":4003")
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
 
 	// Send the JSON data over UDP
-	log.Println("Sending UDP data to", udpDeviceAddr)
-	_, err = conn.WriteToUDP(requestData, udpDeviceAddr)
+	log.Println("Sending devStatus request to", deviceAddr)
+	_, err = conn.WriteToUDP(devStatusRequestData, deviceAddr)
 	if err != nil {
 		fmt.Println(err)
-		return
+		os.Exit(1)
 	}
 
-}
+	//read from UDP listener
+	var devStatusBuf [512]byte
+	n, _, err = conn.ReadFromUDP(devStatusBuf[0:])
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
 
-// Testing out bubbletea
-// Model should create a list of govee devices and allow the user to select one or more
-// Start with just toggling state of selected devices
+	// Unmarshal the data into a DevStatus struct
+	var devStatusResponseData DevStatus
+	err = json.Unmarshal(devStatusBuf[0:n], &devStatusResponseData)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
 
-type model struct {
-	choices  []string         // items on the to-do list
-	cursor   int              // which to-do list item our cursor is pointing at
-	selected map[int]struct{} // which to-do items are selected
-}
+	// Pretty print the data
+	prettyData, err := json.MarshalIndent(devStatusResponseData, "", "  ")
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	fmt.Println(string(prettyData))
 
-func initialModel() model {
+	devStatusResponseData.Msg.DeviceData.Device = scanResponseData.Msg.Data.Device
+	devStatusResponseData.Msg.DeviceData.IP = deviceAddr
+	devStatusResponseData.Msg.DeviceData.Sku = scanResponseData.Msg.Data.Sku
+
+	devStatusResponseData.ToggleDeviceState()
+
 	return model{
-		// Our to-do list is a grocery list
-		choices: []string{"Buy carrots", "Buy celery", "Buy kohlrabi"},
+		choices: []DevStatus{devStatusResponseData},
 
 		// A map which indicates which choices are selected. We're using
 		// the map like a mathematical set. The keys refer to the indexes
@@ -265,7 +285,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	// The header
-	s := "What should we buy at the market?\n\n"
+	s := "The following devices responded to the scan request:\n\n"
 
 	// Iterate over our choices
 	for i, choice := range m.choices {
@@ -283,7 +303,7 @@ func (m model) View() string {
 		}
 
 		// Render the row
-		s += fmt.Sprintf("%s [%s] %s\n", cursor, checked, choice)
+		s += fmt.Sprintf("%s [%s] %s\n", cursor, checked, choice.Msg.DeviceData.IP)
 	}
 
 	// The footer
@@ -291,4 +311,54 @@ func (m model) View() string {
 
 	// Send the UI for rendering
 	return s
+}
+
+func (m DevStatus) ToggleDeviceState() {
+	serverAddr := "239.255.255.250:4002"
+
+	// Resolve the string address to a UDP address
+	udpServerAddr, err := net.ResolveUDPAddr("udp", serverAddr)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	// Start listening for UDP packages on the server address
+	conn, err := net.ListenUDP("udp", udpServerAddr)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	// Create an instance of SimpleStateUpdateRequest
+	toggleStateData := SimpleStateUpdateRequest{
+		Msg: struct {
+			Cmd  string `json:"cmd"`
+			Data struct {
+				Value int `json:"value"`
+			} `json:"data"`
+		}{
+			Cmd: "turn",
+			Data: struct {
+				Value int `json:"value"`
+			}{
+				Value: int(math.Abs(float64(m.Msg.Data.OnOff - 1))),
+			},
+		},
+	}
+
+	// Marshal the data into JSON
+	toggleStateJson, err := json.Marshal(toggleStateData)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	// Send the JSON data over UDP
+	log.Println("Sending Toggle UDP data to", m.Msg.DeviceData.IP)
+	_, err = conn.WriteToUDP(toggleStateJson, m.Msg.DeviceData.IP)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
 }
