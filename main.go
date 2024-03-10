@@ -6,12 +6,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"math"
 	"net"
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	log "github.com/charmbracelet/log"
 )
 
 type ScanRequest struct {
@@ -83,9 +83,8 @@ func main() {
 // Start with just toggling state of selected devices
 
 type model struct {
-	choices  []DevStatus      // lamps that have reported
-	cursor   int              // which lamp our cursor is pointing at
-	selected map[int]struct{} // which lamps are selected
+	choices []DevStatus // lamps that have reported
+	cursor  int         // which lamp our cursor is pointing at
 }
 
 func initialModel() model {
@@ -138,7 +137,7 @@ func initialModel() model {
 	}
 
 	// Send the JSON data over UDP
-	log.Println("Sending UDP data to", udpScanAddr)
+	log.Info("Sending UDP data to", udpScanAddr)
 	_, err = conn.WriteToUDP(jsonData, udpScanAddr)
 	if err != nil {
 		fmt.Println(err)
@@ -189,7 +188,7 @@ func initialModel() model {
 	}
 
 	// Send the JSON data over UDP
-	log.Println("Sending devStatus request to", deviceAddr)
+	log.Info("Sending devStatus request to", deviceAddr)
 	_, err = conn.WriteToUDP(devStatusRequestData, deviceAddr)
 	if err != nil {
 		fmt.Println(err)
@@ -224,15 +223,10 @@ func initialModel() model {
 	devStatusResponseData.Msg.DeviceData.IP = deviceAddr
 	devStatusResponseData.Msg.DeviceData.Sku = scanResponseData.Msg.Data.Sku
 
-	devStatusResponseData.ToggleDeviceState()
+	// devStatusResponseData.ToggleDeviceState()
 
 	return model{
 		choices: []DevStatus{devStatusResponseData},
-
-		// A map which indicates which choices are selected. We're using
-		// the map like a mathematical set. The keys refer to the indexes
-		// of the `choices` slice, above.
-		selected: make(map[int]struct{}),
 	}
 }
 
@@ -269,12 +263,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The "enter" key and the spacebar (a literal space) toggle
 		// the selected state for the item that the cursor is pointing at.
 		case "enter", " ":
-			_, ok := m.selected[m.cursor]
-			if ok {
-				delete(m.selected, m.cursor)
-			} else {
-				m.selected[m.cursor] = struct{}{}
+			err := m.choices[m.cursor].ToggleDeviceState()
+			if err != nil {
+				// TODO: Handle error on TUI
+				fmt.Println(err)
 			}
+
 		}
 	}
 
@@ -298,7 +292,7 @@ func (m model) View() string {
 
 		// Is this choice selected?
 		checked := " " // not selected
-		if _, ok := m.selected[i]; ok {
+		if choice.Msg.Data.OnOff == 1 {
 			checked = "x" // selected!
 		}
 
@@ -313,21 +307,21 @@ func (m model) View() string {
 	return s
 }
 
-func (m DevStatus) ToggleDeviceState() {
+func (m *DevStatus) ToggleDeviceState() error {
 	serverAddr := "239.255.255.250:4002"
 
 	// Resolve the string address to a UDP address
 	udpServerAddr, err := net.ResolveUDPAddr("udp", serverAddr)
 	if err != nil {
 		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
 
 	// Start listening for UDP packages on the server address
 	conn, err := net.ListenUDP("udp", udpServerAddr)
 	if err != nil {
 		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
 
 	// Create an instance of SimpleStateUpdateRequest
@@ -347,18 +341,22 @@ func (m DevStatus) ToggleDeviceState() {
 		},
 	}
 
+	// Update the device state
+	m.Msg.Data.OnOff = toggleStateData.Msg.Data.Value
+
 	// Marshal the data into JSON
 	toggleStateJson, err := json.Marshal(toggleStateData)
 	if err != nil {
 		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
 
 	// Send the JSON data over UDP
-	log.Println("Sending Toggle UDP data to", m.Msg.DeviceData.IP)
 	_, err = conn.WriteToUDP(toggleStateJson, m.Msg.DeviceData.IP)
 	if err != nil {
 		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
+
+	return nil
 }
