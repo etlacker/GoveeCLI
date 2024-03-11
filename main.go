@@ -69,7 +69,31 @@ type DevStatus struct {
 	} `json:"msg"`
 }
 
+var UdpServerAddr *net.UDPAddr
+var UdpScanAddr *net.UDPAddr
+
 func main() {
+	// Populate the global UDP addresses
+	serverAddr := "239.255.255.250:4002"
+	scanAddr := "239.255.255.250:4001"
+
+	// Resolve the string server address to a UDP address
+	udpServerAddr, err := net.ResolveUDPAddr("udp", serverAddr)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	UdpServerAddr = udpServerAddr
+
+	// Resolve the string scan address to a UDP address
+	udpScanAddr, err := net.ResolveUDPAddr("udp", scanAddr)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	UdpScanAddr = udpScanAddr
 
 	p := tea.NewProgram(initialModel())
 	if _, err := p.Run(); err != nil {
@@ -88,25 +112,8 @@ type model struct {
 }
 
 func initialModel() model {
-	serverAddr := "239.255.255.250:4002"
-	scanAddr := "239.255.255.250:4001"
-
-	// Resolve the string address to a UDP address
-	udpServerAddr, err := net.ResolveUDPAddr("udp", serverAddr)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	// Resolve the string address to a UDP address
-	udpScanAddr, err := net.ResolveUDPAddr("udp", scanAddr)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
 	// Start listening for UDP packages on the server address
-	conn, err := net.ListenUDP("udp", udpServerAddr)
+	conn, err := net.ListenUDP("udp", UdpServerAddr)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -137,8 +144,8 @@ func initialModel() model {
 	}
 
 	// Send the JSON data over UDP
-	log.Info("Sending UDP data to", udpScanAddr)
-	_, err = conn.WriteToUDP(jsonData, udpScanAddr)
+	log.Info("Sending UDP data to", UdpScanAddr)
+	_, err = conn.WriteToUDP(jsonData, UdpScanAddr)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -211,6 +218,11 @@ func initialModel() model {
 		os.Exit(1)
 	}
 
+	// Expand the data object with the device, IP and SKU
+	devStatusResponseData.Msg.DeviceData.Device = scanResponseData.Msg.Data.Device
+	devStatusResponseData.Msg.DeviceData.IP = deviceAddr
+	devStatusResponseData.Msg.DeviceData.Sku = scanResponseData.Msg.Data.Sku
+
 	// Pretty print the data
 	prettyData, err := json.MarshalIndent(devStatusResponseData, "", "  ")
 	if err != nil {
@@ -218,12 +230,6 @@ func initialModel() model {
 		os.Exit(1)
 	}
 	fmt.Println(string(prettyData))
-
-	devStatusResponseData.Msg.DeviceData.Device = scanResponseData.Msg.Data.Device
-	devStatusResponseData.Msg.DeviceData.IP = deviceAddr
-	devStatusResponseData.Msg.DeviceData.Sku = scanResponseData.Msg.Data.Sku
-
-	// devStatusResponseData.ToggleDeviceState()
 
 	return model{
 		choices: []DevStatus{devStatusResponseData},
@@ -308,17 +314,8 @@ func (m model) View() string {
 }
 
 func (m *DevStatus) ToggleDeviceState() error {
-	serverAddr := "239.255.255.250:4002"
-
-	// Resolve the string address to a UDP address
-	udpServerAddr, err := net.ResolveUDPAddr("udp", serverAddr)
-	if err != nil {
-		fmt.Println(err)
-		return err
-	}
-
 	// Start listening for UDP packages on the server address
-	conn, err := net.ListenUDP("udp", udpServerAddr)
+	conn, err := net.ListenUDP("udp", UdpServerAddr)
 	if err != nil {
 		fmt.Println(err)
 		return err
